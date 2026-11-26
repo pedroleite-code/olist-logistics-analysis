@@ -1,6 +1,6 @@
 # Data treatment decisions
 
-Decisions taken during the data quality audit (`sql/02_data_quality_audit.sql`), the typed views (`sql/03_create_typed_views.sql`) and the analytical queries (`sql/04_analytical_queries.sql`) of the Olist dataset. Each entry follows the form: decision, reason, impact. Numbers come from the SQL queries and refer to the full dataset (99,441 orders) unless stated otherwise. Premises that cannot be verified with the data are marked as **assumption**.
+Decisions taken during the data quality audit (`sql/02_data_quality_audit.sql`), the typed views (`sql/03_create_typed_views.sql`), the analytical queries (`sql/04_analytical_queries.sql`) and the data preparation notebook (`notebooks/02_data_preparation.ipynb`) of the Olist dataset. Each entry follows the form: decision, reason, impact. Numbers come from the SQL queries and refer to the full dataset (99,441 orders) unless stated otherwise. Premises that cannot be verified with the data are marked as **assumption**.
 
 Last updated: 2026-11-26
 
@@ -75,6 +75,12 @@ Last updated: 2026-11-26
 - **Decision:** only the monthly series (Q1) uses the D10 window; the route, review, freight and Pareto queries (Q2 to Q5) use the full delay scope (96,470 orders). Routes need at least 100 order pairs to enter the ranking and categories need at least 500 items to be listed. **Assumption:** both minimums were set before looking at the results.
 - **Reason:** the window protects a time series from small and incomplete months; the other questions are not time-based, and a single scope keeps their totals reconcilable (Q4a and Q4b share the same control totals to the cent). Without a minimum volume, a route with 2 orders and 1 late order would top the ranking with 50%.
 - **Impact:** 71 of 412 routes and 28 of 74 categories are listed; every total (ALL row, shares and cumulative curves) is computed over all routes and categories before the filter. Rates for small groups near the minimum (for example a route with about 120 pairs, or the states RR, AP and AC with fewer than 100 orders) can vary by several points and are not reported as findings without that caveat.
+
+## D13. Promised and actual delivery days are whole days by date
+
+- **Decision:** `promised_delivery_days` = estimated date minus purchase date; `actual_delivery_days` = customer delivery date minus purchase date; both in whole days, comparing dates without time (same rule as D9). `promised_delivery_days` is computed for all orders; `actual_delivery_days` only for orders in the delay scope (D2) and is missing elsewhere.
+- **Reason:** the estimated date has no time component (D9), so a timestamp difference would mix a promised day with a time of day. Restricting the actual time to the delay scope keeps one definition of "delivered" across all metrics.
+- **Impact:** no order lacks a promised time (0 of 99,441); 2,971 orders outside the scope have no actual time. The identity `actual_delivery_days - promised_delivery_days = delivery_delay_days` holds for all 96,470 orders in scope. In scope, the median promised time is 24 days against a median actual time of 10 days (means 24.37 and 12.50). Extreme values are kept (promised time up to 156 days, actual time from 0 to 210 days, delay from -147 to +188 days); the EDA reports medians next to means. For Project 2, `promised_delivery_days` is known at purchase time and can be a feature; `actual_delivery_days` is known only after delivery and must not be used (leakage).
 
 ## Not investigated (by design)
 
