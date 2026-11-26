@@ -1,66 +1,91 @@
-﻿# Data treatment decisions
+# Data treatment decisions
 
-Decisions taken during the data quality audit of the Olist dataset (`sql/02_data_quality_audit.sql`). Each entry follows the form: decision, reason, impact. Numbers come from the audit queries and refer to the full dataset (99,441 orders).
+Decisions taken during the data quality audit (`sql/02_data_quality_audit.sql`), the typed views (`sql/03_create_typed_views.sql`) and the analytical queries (`sql/04_analytical_queries.sql`) of the Olist dataset. Each entry follows the form: decision, reason, impact. Numbers come from the SQL queries and refer to the full dataset (99,441 orders) unless stated otherwise. Premises that cannot be verified with the data are marked as **assumption**.
 
 Last updated: 2026-11-26
 
 ## D1. Missing values are empty strings: always use NULLIF before casting
 
 - **Decision:** every cast of a staging column uses `NULLIF(col, '')` first (for example `NULLIF(col, '')::timestamp`).
-- **Reason:** in the 8 tables checked (all except `product_category_name_translation`, which was not checked), `null_count` is 0 in every column and all missing values are stored as empty strings. A direct cast of an empty string raises an error.
+- **Reason:** in the 8 tables checked in the audit, `null_count` is 0 in every column and all missing values are stored as empty strings. A direct cast of an empty string raises an error. `product_category_name_translation` was checked later: it has no empty values (see D6).
 - **Impact:** all typed views and Python cleaning treat `''` and NULL as the same missing value.
 
 ## D2. Delay scope: delivered orders with a delivery date
 
 - **Decision:** delay metrics only use orders with status `delivered` and a non-empty `order_delivered_customer_date`.
 - **Reason:** other statuses have no delivery date, and 8 `delivered` orders also lack it.
-- **Impact:** 96,470 of 99,441 orders (97.0%) are in the delay scope. The excluded orders are reported in the README limitations. All orders in the scope have items, seller, product and freight (no delivered order is without items).
+- **Impact:** 96,470 of 99,441 orders (97.0%) are in the delay scope (flag `in_delay_scope` in `analytics.orders`). The excluded orders are reported in the README limitations. All orders in the scope have items, seller, product and freight (no delivered order is without items). See D10 for the 1,729 undelivered orders already past their estimated date.
 
 ## D3. Orders with inconsistent timestamps are kept and flagged
 
 - **Decision:** keep the 1,373 delivered orders with inconsistent timestamps (1,350 with carrier handover before approval, of which 165 also before purchase; plus 23 with customer delivery before carrier handover), flag them in the typed view, and exclude them only from stage-duration metrics.
 - **Reason:** they do not affect the delivery delay calculation (it only uses the customer delivery date and the estimated date), and dropping them would silently shrink the delay scope.
-- **Impact:** delay metrics use 96,470 orders. Stage-duration metrics (approval, handover, transit) use a smaller, flagged subset. The 1,373 orders are 1.42% of the 96,478 delivered orders.
+- **Impact:** delay metrics use 96,470 orders. Stage-duration metrics (approval, handover, transit) use a smaller, flagged subset. The 1,373 orders are 1.42% of the 96,478 delivered orders. The full date chain was checked in the view: no delivered order has approval before purchase (0), so the four flags in `analytics.orders` cover every link of the chain.
 
 ## D4. Order value comes from order_items, not from order_payments
 
 - **Decision:** order value is the sum of `price + freight_value` from `order_items`.
 - **Reason:** freight exists only in `order_items`, so the freight-to-value ratio uses a single source. Payments have a different grain (installments, vouchers), and one delivered order has no payment row.
-- **Impact:** all 96,470 orders in the delay scope have a value. Item and payment totals match (within R$ 0.01) for 99.69% of delivered orders; the aggregate difference is R$ 2,688.02 (0.017%). The 299 diverging orders are reported in the README limitations.
-
+- **Impact:** all 96,470 orders in the delay scope have a value. Item and payment totals match (within R$ 0.01) for 99.69% of delivered orders; the aggregate difference is R$ 2,688.02 (0.017%). The 299 diverging orders are reported in the README limitations. Freight share is always a ratio of sums (`SUM(freight) / SUM(price + freight)`), never an average of per-order ratios.
 
 ## D5. One review per order: the latest one
 
-- **Decision:** each order keeps one review, the one with the latest `review_answer_timestamp` (ties broken by `review_id`).
-- **Reason:** 547 orders have more than one review, and joining all of them would duplicate order-level values. No timestamp ties were found. `review_id` is not a key (764 values appear in 2 orders and 25 in 3 orders); the pair (`review_id`, `order_id`) is unique, so the rule starts from `order_id`. The latest review is assumed to be the most representative of the customer's final experience; this assumption cannot be verified with the available data.
-- **Impact:** 202 of the 547 orders had different scores across their reviews, so the chosen score may differ from the discarded ones (about 0.2% of the 98,673 reviewed orders). 768 orders have no review and are excluded from satisfaction analyses. A sensitivity check (latest vs. earliest vs. average score) is a next step if time allows.
+- **Decision:** each order keeps one review, the one with the latest `review_answer_timestamp` (ties broken by `review_id`, descending; `NULLS LAST` so a review without an answer timestamp is never picked as the latest).
+- **Reason:** 547 orders have more than one review, and joining all of them would duplicate order-level values. No timestamp ties were found and no review lacks a score or an answer timestamp. `review_id` is not a key (764 values appear in 2 orders and 25 in 3 orders); the pair (`review_id`, `order_id`) is unique, so the rule starts from `order_id`. **Assumption:** the latest review is the most representative of the customer's final experience; this cannot be verified with the available data.
+- **Impact:** `analytics.order_reviews_latest` has 98,673 rows (551 review rows discarded). 202 of the 547 orders had different scores across their reviews (about 0.2% of the reviewed orders). 768 orders have no review; inside the delay scope, 646 orders (0.67%) have no review, so satisfaction analyses use 95,824 orders (6,381 of the 6,534 late orders). Interpretation note: for 4,751 of the 6,381 reviewed late orders (74.5%), the review survey was created before the order was delivered (about 100% when the delay exceeds 7 days), against 225 of 89,443 (0.25%) for orders that were not late. The score of late orders therefore reflects a missed delivery promise more than the product itself. Whether those reviews were also answered before delivery was not checked.
 
-## D6. Products with an empty category are kept as unknown
+## D6. Category labels: English translation, Portuguese fallback, unknown when empty
 
-- **Decision:** items whose product has an empty category are kept and labeled `unknown` in the typed view.
-- **Reason:** they represent 1.39% of delivered item rows and 1.29% of product revenue, and excluding them would silently shrink the delay and freight scope.
-- **Impact:** category analyses show an `unknown` group (1,537 item rows in 1,392 delivered orders, 1.44% of delivered orders). The group is reported in the README limitations.
+- **Decision:** the category label in `analytics.order_items` is the English translation when it exists; the original Portuguese name when the category has no row in `product_category_name_translation`; and `unknown` when the product has an empty category. A `category_source` column (`translated`, `untranslated`, `empty`) keeps the origin traceable.
+- **Reason:** empty categories represent 1.39% of delivered item rows and 1.29% of product revenue, and excluding them would silently shrink the delay and freight scope. Two categories have no translation row (`pc_gamer`, `portateis_cozinha_e_preparadores_de_alimentos`); a manual translation would have no source and the volume is negligible. The translation table has a unique key and no empty values (checked), so the join does not add rows.
+- **Impact:** category analyses show an `unknown` group (1,537 item rows in 1,392 delivered orders, 1.44% of delivered orders) and two Portuguese labels (24 item rows in total, 22 delivered). Both are reported in the README limitations.
 
 ## D7. Orders without coordinates are kept with a NULL distance and a flag
 
-- **Decision:** orders whose customer or seller ZIP prefix has no geolocation match are kept in the typed view with a NULL distance and a flag. They are excluded only from distance-based analyses.
+- **Decision:** orders whose customer or seller ZIP prefix has no geolocation match are kept with a NULL distance and a flag. They are excluded only from distance-based analyses.
 - **Reason:** they are at most 0.50% of the 96,470 orders in the delay scope (264 by customer ZIP, 217 by seller ZIP, overlap not measured), and dropping them would silently shrink the delay and freight scope.
-- **Impact:** the late-delivery model (Project 2) and any distance analysis run on a slightly smaller subset, reported in the README limitations.
+- **Impact:** the late-delivery model (Project 2) and any distance analysis run on a slightly smaller subset, reported in the README limitations. ZIP prefixes keep their leading zeros in `customers`, `sellers` and `geolocation` (all have length 5), so joins on ZIP prefix are safe. Python must read ZIP prefixes as text.
 
 ## D8. One coordinate per ZIP prefix, computed from valid points
 
-- **Decision:** each ZIP prefix gets one coordinate, the average latitude and longitude of its points inside an approximate Brazil bounding box (latitude -34 to 6, longitude -75 to -34).
-- **Reason:** `geolocation` has about 52 points per ZIP prefix (1,000,163 rows for 19,015 prefixes), and joining it directly would multiply order rows. 42 rows in 21 ZIP prefixes have coordinates outside Brazil (latitude up to 45, longitude from -101 to 121, in 12 mainland states), which would distort the averages.
+- **Decision:** each ZIP prefix gets one coordinate, the average latitude and longitude of its points inside an approximate Brazil bounding box (latitude -34 to 6, longitude -75 to -34). Implemented in `analytics.zip_coordinates`.
+- **Reason:** `geolocation` has about 52 points per ZIP prefix (1,000,163 rows for 19,015 prefixes), and joining it directly would multiply order rows. 42 rows in 21 ZIP prefixes have coordinates outside Brazil (latitude up to 45, longitude from -101 to 121, in 12 mainland states), which would distort the averages. A narrower box used in public notebooks (latitude -33.75 to 5.27, longitude -73.98 to -34.79) gives the same result: no row falls between the two boxes.
 - **Impact:** 5 ZIP prefixes have no valid point and get a NULL coordinate, handled by D7. Invalid points inside the bounding box are not detected.
+
+## D9. Late delivery is defined by date, not by timestamp
+
+- **Decision:** an order in the delay scope is late when `order_delivered_customer_date::date > order_estimated_delivery_date::date`. `delivery_delay_days` is the signed difference in days (delivery date minus estimated date; negative = early). The "average days late" metric is the average of `delivery_delay_days` among late orders only.
+- **Reason:** the estimated delivery date has no time component (0 of 99,441 orders), so the promise made to the customer is a day, not a time. A timestamp comparison marks as late every order delivered during the promised day. The review scores support the date rule: orders delivered on the estimated day average 4.03 (12.42% of scores 1-2), close to early orders (4.29) and far from orders 1-3 days late (3.29).
+- **Impact:** late rate 6.77% (6,534 orders) with the date rule versus 8.11% (7,826 orders) with a timestamp comparison; the difference is exactly the 1,292 orders delivered on the estimated day (+19.8% late orders under the timestamp rule). Public notebooks that report about 8% use the timestamp rule, so their figures are not comparable. The minority class for Project 2 is 6.77%. Averaging `GREATEST(delay, 0)` over all orders would dilute the metric with zeros and is not used; the DAX measure in Power BI must follow the same definition so that SQL and Power BI reconcile.
+
+## D10. Monthly series: purchase month, Jan 2017 to Aug 2018
+
+- **Decision:** the monthly late-rate series uses the purchase month and is restricted to Jan 2017 to Aug 2018. A month is included when it has at least 500 orders in the delay scope and at most 5% of its orders still open (not delivered, not canceled or unavailable) at the cutoff date. **Assumption:** both thresholds were set before looking at the monthly results.
+- **Reason:** the cutoff date of the data is 2018-10-17 (latest purchase, approval, carrier or delivery timestamp). Sep 2016 (1 order in scope), Oct 2016 (265 in scope, 8.64% open), Dec 2016 (1), Sep 2018 (0) and Oct 2018 (0) fail the criteria. The expected right censoring at the end of the series was not found for the late rate: open orders are about 1% of each month in Jun to Aug 2018. Instead, all 1,729 open orders (1.74% of all orders, spread over every month) were already past their estimated date at the cutoff.
+- **Impact:** the window has 20 months, 96,203 orders in scope and 6,531 late orders. The official late rate stays on the delay scope (D2), because "late" presumes a delivery. Counting the 1,729 open overdue orders as late would raise the overall rate from 6.77% to 8.41%; this is reported in the README limitations as a separate delivery-failure problem. Jan 2017 passes the criteria but is the least reliable month (37 open overdue orders against 22 late orders; sensitivity rate 7.50% versus 2.93%). The average days late is truncated in the last months (it falls from about 20 days in early 2017 to 4.4 in Aug 2018) because long delays were still undelivered at the cutoff; this trend must not be read as an operational improvement.
+
+## D11. Orders with more than one seller or category: pair grain
+
+- **Decision:** the route query and the Pareto queries use the grain (order, seller state), (order, seller) and (order, category). An order with sellers in two states counts once per route; an order with two categories counts once per category. The denominator is the total of pairs, and the double counting is stated in each query. `unknown` counts as a category. Rule threshold: pair grain if the affected late orders are at most 2% of late orders, fractional attribution (1/n) above that. **Assumption:** the 2% threshold was set before looking at the measurement.
+- **Reason:** in the delay scope, 1,275 orders have more than one seller, 509 more than one seller state and 780 more than one category (60 of them involve `unknown`). Among the 6,534 late orders, only 13 have more than one seller (0.20%), 3 more than one seller state (0.05%) and 17 more than one category (0.26%), all far below the threshold.
+- **Impact:** late pairs are 6,537 by route, 6,547 by seller and 6,551 by category (at most 0.26% above the 6,534 late orders). Observation for Project 2: orders with more than one seller are late much less often (13 of 1,275, 1.0%, versus 6.77% overall); a more generous estimated date is a possible explanation, not verified.
+
+## D12. Scope and minimum volumes of the analytical queries
+
+- **Decision:** only the monthly series (Q1) uses the D10 window; the route, review, freight and Pareto queries (Q2 to Q5) use the full delay scope (96,470 orders). Routes need at least 100 order pairs to enter the ranking and categories need at least 500 items to be listed. **Assumption:** both minimums were set before looking at the results.
+- **Reason:** the window protects a time series from small and incomplete months; the other questions are not time-based, and a single scope keeps their totals reconcilable (Q4a and Q4b share the same control totals to the cent). Without a minimum volume, a route with 2 orders and 1 late order would top the ranking with 50%.
+- **Impact:** 71 of 412 routes and 28 of 74 categories are listed; every total (ALL row, shares and cumulative curves) is computed over all routes and categories before the filter. Rates for small groups near the minimum (for example a route with about 120 pairs, or the states RR, AP and AC with fewer than 100 orders) can vary by several points and are not reported as findings without that caveat.
 
 ## Not investigated (by design)
 
-The audit stopped when a new check no longer changed a decision or produced a limitation. These items were left open on purpose:
+The audit and the views stopped when a new check no longer changed a decision or produced a limitation. These items were left open on purpose:
 
-1. Orders with more than one seller, overlap between the 264 and 217 orders without coordinates, and orders of the 5 ZIP prefixes without any valid point. To be measured before computing the seller-to-customer distance; a distance rule for multi-seller orders is still needed.
+1. Overlap between the 264 and 217 orders without coordinates, orders of the 5 ZIP prefixes without any valid point, and the distance rule for the 1,275 orders with more than one seller. To be resolved in Stage 2 before computing the seller-to-customer distance.
 2. Empty weight and dimensions in 2 products (of 32,951). To be measured only if Project 2 uses weight as a feature; otherwise a README limitation.
 3. Cause of the divergence between item totals and payment totals (299 delivered orders). Interest on installments is a hypothesis for the credit card group (245 orders) and was not verified. Cause not identified.
 4. Cause of repeated `review_id` values and of orders with more than one review (547 orders). Cause not identified.
 5. Optional sensitivity check of the review rule (latest vs. earliest vs. average score) on the average score of late and on-time orders.
-6. Empty values in `product_category_name_translation` (71 rows) were not checked.
-
+6. Whether reviews created before delivery were also answered before delivery (D5).
+7. Why the 1,729 open orders were never delivered (lost, returned or not updated in the data).
+8. Promised versus actual delivery time by customer state. Hypothesis: states with high freight and a low late rate (North) receive a more generous estimated date. To be tested in Stage 2.
+9. Seller late rates are not adjusted for each seller's mix of destination states, and category late rates are not adjusted for the mix of customer states.
