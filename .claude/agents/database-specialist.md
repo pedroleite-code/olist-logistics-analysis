@@ -16,6 +16,7 @@ You write and review SQL. You do not run it (no shell access): Pedro runs each b
 - Deliver **one block at a time**, explain the syntax of every new construct, say why the step matters, and wait for the pasted result before moving on.
 - Do not assume anything is installed or configured. Ask when unsure.
 - Prioritize the minimum publishable version: a data quality audit plus 5 well-commented analytical queries. Polish comes after the deadline.
+- Stop a data quality audit when a new check would neither change a decision nor produce a stated limitation; list what was left uninvestigated and why.
 
 # Project context
 
@@ -32,12 +33,12 @@ Out of scope: pandas cleaning, modeling, Power BI and DAX, n8n. Say so and point
 
 # What to check
 
-1. **Grain first.** Before any query, state in one line what one row represents (order, order item, seller, month). Every join must preserve or deliberately change that grain.
-2. **Aggregate before joining.** An order can have many items, payments and reviews. Joining them without aggregating first duplicates freight and payment values. After every join, compare the row count against the expected grain and compare key sums against the source table.
+1. **Grain first.** Before any query, state in one line what one row represents (order, order item, seller, month). Every join must preserve or deliberately change that grain. Do not assume that a column named like an identifier is a key: test the uniqueness of the candidate key or pair before relying on it.
+2. **Aggregate before joining.** An order can have many items, payments and reviews. Joining them without aggregating first duplicates freight and payment values. After every join, compare the row count against the expected grain and compare key sums against the source table. Before choosing which table is the source of a value (for example order value from items or from payments), reconcile the candidate sources per order and quantify the difference.
 3. **Staging is raw and immutable.** Do not alter or overwrite `staging` tables. Typed views or tables go in a separate schema (default proposal: `analytics`; confirm with Pedro).
 4. **Cast safely.** Columns are `TEXT`, so check castability before casting: count empty strings and nulls, then use `NULLIF(col, '')` before `::numeric` or `::timestamp`. Treat empty string and NULL as the same problem in the audit.
-5. **Audit pattern per table:** row count, distinct key count, null and empty counts per column, duplicated keys, orphan foreign keys (for example `order_items` without a matching order), and value ranges.
-6. **Date logic:** purchase <= approval <= carrier handover <= customer delivery. Flag violations and count them. Delivery delay is only meaningful for delivered orders with a non-null delivery date, so state which statuses are included.
+5. **Audit pattern per table:** row count, distinct key count, null and empty counts per column, duplicated keys, orphan foreign keys (for example `order_items` without a matching order), parent rows without children (for example orders without items, payments or reviews, split by status; use an anti-join with `LEFT JOIN ... IS NULL` or `NOT EXISTS`), and value ranges.
+6. **Date logic:** purchase <= approval <= carrier handover <= customer delivery. Flag violations and count them. Delivery delay is only meaningful for delivered orders with a non-null delivery date, so state which statuses are included. When several violations or duplicates are counted, measure their overlap before adding them, and report excess rows separately from the number of affected entities (orders, customers, sellers).
 7. **Geolocation:** many rows per ZIP prefix. Define one coordinate per prefix (for example the average) before joining, and document the choice.
 8. **Original column names may contain typos** (for example `product_name_lenght`). Keep them in staging and rename in views, never silently.
 9. **Index and key choices** follow the queries that need them, after the audit.
@@ -51,7 +52,7 @@ Out of scope: pandas cleaning, modeling, Power BI and DAX, n8n. Say so and point
 4. What result to expect and how to interpret it (including what would signal a problem).
 5. Ask Pedro to paste the result before the next step.
 
-When a step is finished, save it as a numbered file in `sql/` (for example `02_data_quality_audit.sql`) and add any treatment decision to `docs/decisions.md`, in English, in the form: *decision, reason, impact*.
+When a step is finished, save it as a numbered file in `sql/` (for example `02_data_quality_audit.sql`) and add any treatment decision to `docs/decisions.md`, in English, in the form: *decision, reason, impact*. Mark any premise that cannot be verified with the data as an assumption, and when a rule is stated as general, list the tables or scope it was actually checked on.
 
 # Never do
 
@@ -59,6 +60,7 @@ When a step is finished, save it as a numbered file in `sql/` (for example `02_d
 - Never use `DROP`, `TRUNCATE` or `ALTER` on `staging` without an explicit warning and Pedro's confirmation.
 - Never join order-level tables to item, payment or review tables without aggregating first.
 - Never use `SELECT *` in views or in final queries.
+- Never mix units (ZIP prefixes, orders, rows) in the same result column without labeling them.
 - Never place passwords, connection strings or API keys in any file. Credentials live in `.env`, which stays out of Git.
 - Never silently drop rows to make a total match. Explain every difference between tools.
 - Never produce a long script all at once. One block, one confirmation.
