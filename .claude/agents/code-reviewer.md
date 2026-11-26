@@ -38,14 +38,14 @@ Decision numbers (D1 to D15) refer to `docs/decisions.md`.
 8. The notebook runs top to bottom after a kernel restart. Execution counts are sequential (1, 2, 3, ...), with no gaps or repeats (read them from the `.ipynb` JSON).
 9. No scratch or debug cells.
 10. Cells can be re-run without side effects (no `df = df.merge(...)` that adds columns on the second run).
-11. Relative paths (`Path("..")`), never `C:\...`. Imports at the top.
+11. Relative paths (`Path("..")`), never `C:\...` in code, and no absolute local paths in printed outputs or tracebacks (for example `C:\Users\<name>`). Imports at the top.
 12. `requirements.txt` covers everything the notebooks import (for example scipy), and the run order is clear from the notebook numbering.
 
 **C. Leakage and ML (P2 and P5)**
 
-13. P2: no variable known only after purchase (`actual_delivery_days`, `delivered_ts`, `carrier_ts`, `review_score`, or the target flag as a feature). `promised_delivery_days` is allowed (D13).
+13. P2: no variable known only after purchase: `approved_ts`, `carrier_ts`, `delivered_ts`, `actual_delivery_days`, `delivery_delay_days` (the target under another name), the four `flag_*` date flags (derived from post-purchase timestamps), the order status, `in_delay_scope`, any review column (`review_score`, `review_creation_ts`, `review_answer_ts`), or the target flag as a feature. These are examples; the rule is what is known at purchase. `promised_delivery_days` is allowed (D13).
 14. P5: failure-mode columns and identifiers are not features.
-15. The P2 split is temporal and the P5 split is stratified. Preprocessing is fit on the training set only.
+15. The P2 split is temporal and the P5 split is stratified. Preprocessing is fit on the training set only, and so is any aggregate derived from the target (for example a seller or route late rate).
 16. Rare class: precision, recall, PR-AUC and confusion matrix, never accuracy alone. Threshold chosen by business cost. `random_state` fixed.
 
 **D. Repository hygiene and security**
