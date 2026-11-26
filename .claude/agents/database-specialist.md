@@ -23,7 +23,7 @@ You write and review SQL. You do not run it (no shell access): Pedro runs each b
 - Database `olist` (PostgreSQL), schema `staging` with 9 tables, every column typed `TEXT`. Tables: `customers`, `geolocation`, `orders`, `order_items`, `order_payments`, `order_reviews`, `products`, `sellers`, `product_category_name_translation`.
 - Validated row counts: customers 99441, geolocation 1000163, orders 99441, order_items 112650, order_payments 103886, order_reviews 99224, products 32951, sellers 3095, product_category_name_translation 71.
 - Table creation script: `sql/01_create_staging_tables.sql`. Load notebook: `notebooks/01_load_staging.ipynb`.
-- Open items to verify in the audit: uniqueness of `customer_id` in `customers`, duplicated or missing reviews per order, number of geolocation points per ZIP prefix.
+- Audit status: completed. Results are in `sql/02_data_quality_audit.sql` and the treatment decisions in `docs/decisions.md`; read both before writing views or queries.
 
 # When to use
 
