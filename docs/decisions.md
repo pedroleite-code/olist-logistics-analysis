@@ -43,7 +43,7 @@ Last updated: 2026-11-26
 ## D7. Orders without coordinates are kept with a NULL distance and a flag
 
 - **Decision:** orders whose customer or seller ZIP prefix has no geolocation match are kept with a NULL distance and a flag. They are excluded only from distance-based analyses.
-- **Reason:** they are at most 0.50% of the 96,470 orders in the delay scope (264 by customer ZIP, 217 by seller ZIP, overlap not measured), and dropping them would silently shrink the delay and freight scope.
+- **Reason:** they are at most 0.50% of the 96,470 orders in the delay scope (481 orders: 264 by customer ZIP, 217 by seller ZIP, 1 in both, and 1 from a ZIP prefix without a valid point; see D14), and dropping them would silently shrink the delay and freight scope.
 - **Impact:** the late-delivery model (Project 2) and any distance analysis run on a slightly smaller subset, reported in the README limitations. ZIP prefixes keep their leading zeros in `customers`, `sellers` and `geolocation` (all have length 5), so joins on ZIP prefix are safe. Python must read ZIP prefixes as text.
 
 ## D8. One coordinate per ZIP prefix, computed from valid points
@@ -82,11 +82,23 @@ Last updated: 2026-11-26
 - **Reason:** the estimated date has no time component (D9), so a timestamp difference would mix a promised day with a time of day. Restricting the actual time to the delay scope keeps one definition of "delivered" across all metrics.
 - **Impact:** no order lacks a promised time (0 of 99,441); 2,971 orders outside the scope have no actual time. The identity `actual_delivery_days - promised_delivery_days = delivery_delay_days` holds for all 96,470 orders in scope. In scope, the median promised time is 24 days against a median actual time of 10 days (means 24.37 and 12.50). Extreme values are kept (promised time up to 156 days, actual time from 0 to 210 days, delay from -147 to +188 days); the EDA reports medians next to means. For Project 2, `promised_delivery_days` is known at purchase time and can be a feature; `actual_delivery_days` is known only after delivery and must not be used (leakage).
 
+## D14. Seller-to-customer distance: straight line, farthest item per order
+
+- **Decision:** at item grain, `distance_km` is the great-circle (haversine) distance between the seller ZIP coordinate and the customer ZIP coordinate (D8). At order grain, `distance_km` is the largest item distance of the order, and it is missing when any item of the order has no distance.
+- **Reason:** each item has one seller, so the item distance is unambiguous. An order with several sellers is complete only when the farthest package arrives, so the maximum represents the bottleneck; an average would hide it. Taking the maximum over the available items only would understate the distance of exactly the multi-seller orders (1,275 in the delay scope). **Assumption:** the farthest seller determines the delivery time of a multi-seller order; this is not verified.
+- **Impact:** in the delay scope, 481 orders (0.50%) have no distance: 264 with a customer ZIP without a geolocation match, 217 with a seller ZIP without a match (1 order in both groups) and 1 order touching the 5 ZIP prefixes without a valid point. The same set is obtained from the calculation and from the ZIP groups. 95,989 orders have a distance (median 435.6 km, mean 601.8 km, maximum 3,399.2 km). Limitation: straight-line distance between ZIP centroids, not road distance.
+
+## D15. Two exported tables (order and item grain) in CSV for Excel and Power BI
+
+- **Decision:** the notebook exports `orders.csv` (99,441 rows, one per order, no scope filter) and `order_items.csv` (112,650 rows, one per item) to `data/processed/`, in UTF-8 with BOM, dates in ISO format, integers without decimals, booleans as `True`/`False` and missing values as empty cells. Money columns exist only in `order_items` (D4). `in_delay_scope`, `is_late`, `delivery_delay_days` and `customer_state` are copied from `orders` into `order_items`, never recalculated. `distance_km` is rounded to 2 decimals. Excel and Power BI read both files through Power Query with the en-US locale and explicit column types (ZIP prefixes as text).
+- **Reason:** a single flat table cannot serve the star model in Power BI, the pair grain of D11 and the order grain of Project 2 at the same time. One CSV format for both tools avoids reconciling two exports; Power Query handles the decimal separator through the locale. The copied columns allow average delay by category or seller and Excel pivots on `order_items` without a data model.
+- **Impact:** late orders counted from `order_items` must use a distinct count of `order_id` (counting rows gives late items), and category totals add up to late pairs (6,551 versus 6,534 late orders, D11). Average delay from `order_items` must be computed per order: 10.62 days among late orders (same as SQL) versus 10.49 with a simple item-weighted average. All control totals were reconciled from the re-read files (15 counts, 8 values and rates, the D13 identity and the copied columns). Each file is about 24 MB; the processed CSVs are not versioned during development and are regenerated by notebooks 01 and 02. Whether the final version is committed is decided at the publication stage.
+
 ## Not investigated (by design)
 
 The audit and the views stopped when a new check no longer changed a decision or produced a limitation. These items were left open on purpose:
 
-1. Overlap between the 264 and 217 orders without coordinates, orders of the 5 ZIP prefixes without any valid point, and the distance rule for the 1,275 orders with more than one seller. To be resolved in Stage 2 before computing the seller-to-customer distance.
+1. Overlap between the 264 and 217 orders without coordinates, orders of the 5 ZIP prefixes without any valid point, and the distance rule for the 1,275 orders with more than one seller. To be resolved in Stage 2 before computing the seller-to-customer distance. Resolved in Stage 2: see D14.
 2. Empty weight and dimensions in 2 products (of 32,951). To be measured only if Project 2 uses weight as a feature; otherwise a README limitation.
 3. Cause of the divergence between item totals and payment totals (299 delivered orders). Interest on installments is a hypothesis for the credit card group (245 orders) and was not verified. Cause not identified.
 4. Cause of repeated `review_id` values and of orders with more than one review (547 orders). Cause not identified.
