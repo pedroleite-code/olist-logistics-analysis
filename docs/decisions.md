@@ -127,5 +127,5 @@ The audit and the views stopped when a new check no longer changed a decision or
 5. Optional sensitivity check of the review rule (latest vs. earliest vs. average score) on the average score of late and on-time orders.
 6. Whether reviews created before delivery were also answered before delivery (D5).
 7. Why the 1,729 open orders were never delivered (lost, returned or not updated in the data).
-8. 8. Promised versus actual delivery time by customer state. Resolved in Stage 2: see D16 and `notebooks/03_eda.ipynb`. The hypothesis is supported as exploratory, with C2 met exactly at the boundary. The original premise held only for some North states: RO (2.88%) and AM (2.76%) are rarely late, but the North as a region is late 8.57% of the time, above the national 6.77%.
+8. Promised versus actual delivery time by customer state. Resolved in Stage 2: see D16 and `notebooks/03_eda.ipynb`. The hypothesis is supported as exploratory, with C2 met exactly at the boundary. The original premise held only for some North states: RO (2.88%) and AM (2.76%) are rarely late, but the North as a region is late 8.57% of the time, above the national 6.77%.
 9. Seller late rates are not adjusted for each seller's mix of destination states, and category late rates are not adjusted for the mix of customer states.
